@@ -160,6 +160,13 @@ class gsv_t {
         }
         _env.shift_right(r_y, r_y, 1);  // r_y = 8 * a_y^4
 
+#ifdef SM2
+        mod_add(m, a_x, u, field);           // m = a_x + u
+        mod_sub(u, a_x, u, field);           // u = a_x - u
+        _env.mont_mul(m, m, u, field, np0);  // m = (a_x + u) * (a_x - u) = a_x^2 - a_z^4
+        mod_lshift1(t, m, field);            // t = 2 * (a_x^2 - a_z^4)
+        mod_add(m, m, t, field);             // m = 3 * (a_x^2 - a_z^4)
+#else
         _env.mont_sqr(m, a_x, field, np0);  // m = a_x ^ 2
         mod_lshift1(t, m, field);           // t = 2 * a_x^2
         mod_add(m, m, t, field);            // m = 3 * a_x^2
@@ -167,6 +174,7 @@ class gsv_t {
         _env.mont_sqr(u, u, field, np0);       // u = a_z^4
         _env.mont_mul(u, u, g_a, field, np0);  // u = g_a * a_z^4
         mod_add(m, m, u, field);               // m = 3 * a_x^2 + g_a * a_z^4
+#endif
 
         mod_lshift1(u, s, field);           // u = 8 * a_x * a_y^2
         _env.mont_sqr(r_x, m, field, np0);  // r_x = m^2
@@ -332,10 +340,11 @@ class gsv_t {
         _env.set(q_z, p_z);
         _env.set_ui32(r_z, 0);
 
-        for (int i = 0; i < (params::BITS + 31) / 32; i++) {
+        int bits = (params::BITS + 31) / 32;
+        for (int i = 0; i < bits; i++) {
             limb = s_d._limbs[i];
             if (limb == 0) {
-                break;
+                break;  // What if an empty word in the middle?
             }
             uint32_t mask = limb;
             for (int j = 0; j < 32; j++) {
@@ -358,21 +367,26 @@ class gsv_t {
         __shared__ cgbn_mem_t<params::BITS> s_d;
 
         _env.store(&s_d, d);
-        _env.set_ui32(r_z, 0);
         _env.set(q_x, p_x);
         _env.set(q_y, p_y);
         _env.set(q_z, p_z);
+        _env.set_ui32(r_z, 0);
 
+        int bits = (params::BITS + 31) / 32;
         int flag = 0;
-        for (int i = (params::BITS + 31) / 32 - 1; i >= 0; i--) {
+        for (int i = bits - 1; i >= 0; i--) {
             limb = s_d._limbs[i];
-            if (limb == 0) continue;
+            if (limb == 0) {
+                continue;
+            }
             uint32_t mask = 0x80000000L;
             for (int j = 0; j < 32; j++) {
                 if ((!flag) && (limb & mask)) {
                     flag = 1;
                 }
-                if (flag) point_dbl_ipp(r_x, r_y, r_z, r_x, r_y, r_z, field, g_a, np0);
+                if (flag) {
+                    point_dbl_ipp(r_x, r_y, r_z, r_x, r_y, r_z, field, g_a, np0);
+                }
                 if (limb & mask) {
                     // if (threadIdx.x == 0) printf("%d\t%d:\t%d\t%d\t%u\t%u\n", blockIdx.x, threadIdx.x, i, j, limb, mask);
                     point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, q_y, q_z, field, g_a, np0);
@@ -381,6 +395,10 @@ class gsv_t {
             }
         }
     }
+
+    __device__ __forceinline__ void point_mult_window(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
+                                                      const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
+                                                      const uint32_t np0) {}
 
     // transform (X, Y, Z) into (x, y) := (X/Z^2, Y/Z^3)
     __device__ __forceinline__ void conv_affine_x_y(bn_t &a_x, bn_t &a_y, const bn_t &j_x, const bn_t &j_y, const bn_t &j_z,
@@ -523,7 +541,7 @@ class gsv_t {
         _env.bn2mont(y1, y1, field);
         point_mult(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
 
-        __syncthreads(); // TODO: temp fix of wrong answer, need to test on different input
+        __syncthreads();  // TODO: temp fix of wrong answer, need to test on different input
 
         _env.set(x2, key_x);
         _env.set(y2, key_y);
@@ -644,6 +662,13 @@ void test_sig_verify(uint32_t instance_count) {
     results = (int32_t *)malloc(sizeof(int32_t) * instance_count);
     instances = gsv_t<params>::generate_instances(instance_count);
 
+#ifdef SM2
+    set_words(sm2.order._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", params::BITS / 32);
+    set_words(sm2.g_x._limbs, "32C4AE2C1F1981195F9904466A39C9948FE30BBFF2660BE1715A4589334C74C7", params::BITS / 32);
+    set_words(sm2.g_y._limbs, "BC3736A2F4F6779C59BDCEE36B692153D0A9877CC62A474002DF32E52139F0A0", params::BITS / 32);
+    set_words(sm2.field._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", params::BITS / 32);
+    set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", params::BITS / 32);
+#else
     set_words(sm2.order._limbs, "8542D69E4C044F18E8B92435BF6FF7DD297720630485628D5AE74EE7C32E79B7", params::BITS / 32);
     // #ifdef DEBUG
     //   set_words(sm2.g_x._limbs, "1657FA75BF2ADCDC3C1F6CF05AB7B45E04D3ACBE8E4085CFA669CB2564F17A9F", params::BITS / 32);
@@ -654,6 +679,7 @@ void test_sig_verify(uint32_t instance_count) {
     // #endif
     set_words(sm2.field._limbs, "8542D69E4C044F18E8B92435BF6FF7DE457283915C45517D722EDB8B08F1DFC3", params::BITS / 32);
     set_words(sm2.g_a._limbs, "787968B4FA32C3FD2417842E73BBFEFF2F3C848B6831D7E0EC65228B3937E498", params::BITS / 32);
+#endif
 
     auto t_start = std::chrono::high_resolution_clock::now();
 
@@ -702,12 +728,12 @@ int main() {
 
     test_sig_verify<params>(32768);
 
-    // test_sig_verify<params>(32768);
+    test_sig_verify<params>(32768);
 
-    for (int ins = 256; ins <= 1048576; ins *= 2) {
-        printf("#instances: %d\n", ins);
-        test_sig_verify<params>(ins);
-    }
+    // for (int ins = 256; ins <= 1048576; ins *= 2) {
+    //     printf("#instances: %d\n", ins);
+    //     test_sig_verify<params>(ins);
+    // }
 
     return 0;
 }
