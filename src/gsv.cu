@@ -372,7 +372,7 @@ class gsv_t {
                 if ((!flag) && (limb & mask)) {
                     flag = 1;
                 }
-                if (flag) point_dbl(r_x, r_y, r_z, r_x, r_y, r_z, field, g_a, np0);
+                if (flag) point_dbl_ipp(r_x, r_y, r_z, r_x, r_y, r_z, field, g_a, np0);
                 if (limb & mask) {
                     // if (threadIdx.x == 0) printf("%d\t%d:\t%d\t%d\t%u\t%u\n", blockIdx.x, threadIdx.x, i, j, limb, mask);
                     point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, q_y, q_z, field, g_a, np0);
@@ -523,6 +523,8 @@ class gsv_t {
         _env.bn2mont(y1, y1, field);
         point_mult(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
 
+        __syncthreads(); // TODO: temp fix of wrong answer, need to test on different input
+
         _env.set(x2, key_x);
         _env.set(y2, key_y);
         _env.set(z2, one);
@@ -538,11 +540,7 @@ class gsv_t {
 
         mod_add(t, e, x1, order);
 
-        if (_env.compare(r, t)) {
-            return 0;
-        }
-
-        return 1;
+        return _env.compare(r, t);
     }
 
     __host__ static instance_t *generate_instances(uint32_t count) {
@@ -581,7 +579,7 @@ class gsv_t {
             int openssl_result = -1;
 
             // TODO: call OpenSSL sig verify here
-            openssl_result = 1;
+            openssl_result = 0;
 
 #ifdef DEBUG
             print_words(instances[index].r._limbs, params::BITS / 32);
@@ -638,10 +636,10 @@ void test_sig_verify(uint32_t instance_count) {
 
     instance_t *instances, *d_instances;
     ec_t sm2;
-    int32_t *results, *d_results;  // signature verification result, 1 is true, 0 is false
+    int32_t *results, *d_results;  // signature verification result, 0 is true, 1 is false
     cgbn_error_report_t *report;
-    int32_t TPB = (params::TPB == 0) ? 128 : params::TPB;
-    int32_t TPI = params::TPI, IPB = TPB / TPI;
+    int32_t TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
+    int32_t TPI = params::TPI, IPB = TPB / TPI;            // IPB: instances per block
 
     results = (int32_t *)malloc(sizeof(int32_t) * instance_count);
     instances = gsv_t<params>::generate_instances(instance_count);
@@ -659,7 +657,6 @@ void test_sig_verify(uint32_t instance_count) {
 
     auto t_start = std::chrono::high_resolution_clock::now();
 
-    CUDA_CHECK(cudaSetDevice(0));
     CUDA_CHECK(cudaMalloc((void **)&d_instances, sizeof(instance_t) * instance_count));
     CUDA_CHECK(cudaMalloc((void **)&d_results, sizeof(int32_t) * instance_count));
     CUDA_CHECK(cudaMemcpy(d_instances, instances, sizeof(instance_t) * instance_count, cudaMemcpyHostToDevice));
@@ -699,9 +696,13 @@ void test_sig_verify(uint32_t instance_count) {
 }
 
 int main() {
+    CUDA_CHECK(cudaSetDevice(1));
+
     typedef gsv_params_t<16, 512> params;  // threads per instance, instance size
 
-    test_sig_verify<params>(256);
+    test_sig_verify<params>(32768);
+
+    // test_sig_verify<params>(32768);
 
     for (int ins = 256; ins <= 1048576; ins *= 2) {
         printf("#instances: %d\n", ins);
