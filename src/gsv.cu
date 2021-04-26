@@ -337,9 +337,32 @@ class gsv_t {
     }
 
     // double-and-add, index increasing
+    // Expected complexity: n * D + n/2 * A
     __device__ __forceinline__ void point_mult(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
                                                const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
                                                const uint32_t np0) {
+        bn_t q_x, q_y, q_z;
+        bn_t k;
+
+        _env.set(k, d);
+        _env.set(q_x, p_x);
+        _env.set(q_y, p_y);
+        _env.set(q_z, p_z);
+        _env.set_ui32(r_z, 0);
+
+        while (_env.compare_ui32(k, 0) > 0) {
+            if (_env.ctz(k) == 0) {  // k_i = 1
+                point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, q_y, q_z, field, g_a, np0);
+            }
+            point_dbl_ipp(q_x, q_y, q_z, q_x, q_y, q_z, field, g_a, np0);
+            _env.shift_right(k, k, 1);
+        }
+    }
+
+    // double-and-add, use shared memory to store d
+    __device__ __forceinline__ void point_mult_shared(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
+                                                      const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
+                                                      const uint32_t np0) {
         bn_t q_x, q_y, q_z;
         uint32_t limb;
         __shared__ cgbn_mem_t<params::BITS> s_d;
@@ -350,20 +373,18 @@ class gsv_t {
         _env.set(q_z, p_z);
         _env.set_ui32(r_z, 0);
 
-        int bits = (params::BITS + 31) / 32;
-        for (int i = 0; i < bits; i++) {
+        for (int i = 0; i < 8; i++) {  // 256-bit integer
             limb = s_d._limbs[i];
-            if (limb == 0) {
-                break;  // What if an empty word in the middle?
-            }
-            uint32_t mask = limb;
+            // if (limb == 0) {  // this useless 'if' can improve 256/512 instances performance...
+            //     break;
+            // }
             for (int j = 0; j < 32; j++) {
-                if (mask & 1) {
+                if (limb & 1) {
                     // if (threadIdx.x == 0) printf("%d\t%d:\t%d\t%d\t%u\t%u\n", blockIdx.x, threadIdx.x, i, j, limb, mask);
                     point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, q_y, q_z, field, g_a, np0);
                 }
                 point_dbl_ipp(q_x, q_y, q_z, q_x, q_y, q_z, field, g_a, np0);
-                mask >>= 1;
+                limb >>= 1;
             }
         }
     }
@@ -382,13 +403,13 @@ class gsv_t {
         _env.set(q_z, p_z);
         _env.set_ui32(r_z, 0);
 
-        int bits = (params::BITS + 31) / 32;
+        // int bits = (params::BITS + 31) / 32;
         int flag = 0;
-        for (int i = bits - 1; i >= 0; i--) {
+        for (int i = 7; i >= 0; i--) {
             limb = s_d._limbs[i];
-            if (limb == 0) {
-                continue;
-            }
+            // if (limb == 0) {
+            //     continue;
+            // }
             uint32_t mask = 0x80000000L;
             for (int j = 0; j < 32; j++) {
                 if ((!flag) && (limb & mask)) {
@@ -406,9 +427,55 @@ class gsv_t {
         }
     }
 
-    __device__ __forceinline__ void point_mult_window(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
-                                                      const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
-                                                      const uint32_t np0) {}
+    // Non-adjacent form (NAF)
+    // Expected complexity: n * D + n/3 * A
+    __device__ __forceinline__ void point_mult_naf(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
+                                                   const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
+                                                   const uint32_t np0) {
+        bn_t q_x, q_y, q_z;
+        bn_t k, m_y;
+        int8_t naf[257];
+
+        _env.set(q_x, p_x);
+        _env.set(q_y, p_y);
+        _env.set(q_z, p_z);
+        _env.set(k, d);
+        _env.set_ui32(r_z, 0);
+
+        _env.sub(m_y, field, p_y);  // my = -p_y mod field
+
+        int bits = 0;
+        while (_env.compare_ui32(k, 0) > 0) {
+            if (_env.ctz(k) == 0) {  // k is odd
+                _env.shift_right(k, k, 1);
+                if (_env.ctz(k) == 0) {  // k mod 4 = 3
+                    naf[bits] = -1;
+                    _env.add_ui32(k, k, 1);
+                } else {  // k mod 4 = 1;
+                    naf[bits] = 1;
+                }
+            } else {
+                _env.shift_right(k, k, 1);
+                naf[bits] = 0;
+            }
+            ++bits;
+        }
+
+        for (int i = bits - 1; i >= 0; i--) {
+            point_dbl_ipp(r_x, r_y, r_z, r_x, r_y, r_z, field, g_a, np0);
+            if (naf[i] == 1) {
+                point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, q_y, q_z, field, g_a, np0);
+            } else if (naf[i] == -1) {
+                point_add_ipp(r_x, r_y, r_z, r_x, r_y, r_z, q_x, m_y, q_z, field, g_a, np0);
+            }
+        }
+    }
+
+    // wNAF: width-w NAF. needs to pre-compute iP for i={1,3,5,...,2^{w-1}-1}.
+    // Expected complexity: 1 * D + (2^{w-2}-1) * A (pre-computation), n * D + n/(w+1) * A
+    __device__ __forceinline__ void point_mult_wnaf(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
+                                                    const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
+                                                    const uint32_t np0) {}
 
     // transform (X, Y, Z) into (x, y) := (X/Z^2, Y/Z^3)
     __device__ __forceinline__ void conv_affine_x_y(bn_t &a_x, bn_t &a_y, const bn_t &j_x, const bn_t &j_y, const bn_t &j_z,
@@ -550,7 +617,7 @@ class gsv_t {
         _env.bn2mont(x1, x1, field);
         mod(y1, field);
         _env.bn2mont(y1, y1, field);
-        point_mult(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
+        point_mult_naf(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
 
         __syncthreads();  // TODO: temp fix of wrong answer, need to test on different input
 
@@ -561,7 +628,7 @@ class gsv_t {
         _env.bn2mont(x2, x2, field);
         mod(y2, field);
         _env.bn2mont(y2, y2, field);
-        point_mult(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
+        point_mult_naf(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
 
         point_add(x1, y1, z1, x1, y1, z1, x2, y2, z2, field, g_a, np0);
 
@@ -758,9 +825,9 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMalloc((void **)&d_results, sizeof(int32_t) * MAX_INS));
     CUDA_CHECK(cgbn_error_report_alloc(&report));
 
-    test_sig_verify<params>(32768, d_instances, d_results, report);
+    test_sig_verify<params>(256, d_instances, d_results, report);
 
-    // test_sig_verify<params>(32768, d_instances, d_results);
+    // test_sig_verify<params>(32768, d_instances, d_results, report);
 
     for (int ins = 256; ins <= 1048576; ins *= 2) {
         printf("#instances: %d\n", ins);
