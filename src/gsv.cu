@@ -9,6 +9,8 @@
 #include "../include/cgbn/cgbn.h"
 #include "support.h"
 
+#define SM2
+
 // The CGBN context uses the following three parameters:
 //   TBP             - threads per block (zero means to use the blockDim.x)
 //   MAX_ROTATION    - must be small power of 2, imperically, 4 works well
@@ -72,6 +74,7 @@ class gsv_t {
         }
     }
 
+    // fast modular addition: r = (a + b) mod m
     // both a and b should be non-negative and less than m
     __device__ __forceinline__ void mod_add(bn_t &r, const bn_t &a, const bn_t &b, const bn_t &m) {
         _env.add(r, a, b);
@@ -80,12 +83,14 @@ class gsv_t {
         }
     }
 
+    // r = (a - b) mod m
     __device__ __forceinline__ void mod_sub(bn_t &r, const bn_t &a, const bn_t &b, const bn_t &m) {
         if (_env.sub(r, a, b)) {  // a < b
             _env.add(r, r, m);
         }
     }
 
+    // r = (a * 2) mod m
     __device__ __forceinline__ void mod_lshift1(bn_t &r, const bn_t &a, const bn_t &m) {
         _env.shift_left(r, a, 1);
         if (_env.compare(r, m) >= 0) {
@@ -93,14 +98,15 @@ class gsv_t {
         }
     }
 
-    // TODO: optimize
+    // not used
     __device__ __forceinline__ void mod_lshift(bn_t &r, const bn_t &a, const bn_t &m, uint32_t n) {
-        for (int i = 0; i < n; i++) {
+        for (uint32_t i = 0; i < n; i++) {
             mod_lshift1(r, a, m);
         }
     }
 
-    // TODO: buggy, do not use; needs debugging
+    // OpenSSL's point doubling. Buggy, do not use
+    // Complexity: 6S, 4M, 2A, 3D, 3L, 1L2, 1L3
     __device__ __forceinline__ void point_dbl(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &a_x, const bn_t &a_y,
                                               const bn_t &a_z, const bn_t &field, const bn_t &g_a, const uint32_t np0) {
         if (_env.equals_ui32(a_z, 0)) {
@@ -137,6 +143,9 @@ class gsv_t {
         mod_sub(r_y, n0, n3, field);            // r_y = n1 * (n2 - r_x) - n3
     }
 
+    // Intel IPP's faster point doubling
+    // Complexity: 6S, 4M, 2A, 3D, 3L, 1R
+    // SM2:        4S, 4M, 2A, 4D, 3L, 1R
     __device__ __forceinline__ void point_dbl_ipp(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &a_x, const bn_t &a_y,
                                                   const bn_t &a_z, const bn_t &field, const bn_t &g_a, const uint32_t np0) {
         if (_env.equals_ui32(a_z, 0)) {
@@ -185,6 +194,8 @@ class gsv_t {
         mod_sub(r_y, s, r_y, field);         // r_y = (4 * a_x * a_y^2 - r_x) * m - 8 * a_y^4
     }
 
+    // OpenSSL's point addition
+    // Complexity: 4S, 12M, 2A, 5D, 1L, 1R
     __device__ __forceinline__ void point_add(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &a_x, const bn_t &a_y,
                                               const bn_t &a_z, const bn_t &b_x, const bn_t &b_y, const bn_t &b_z,
                                               const bn_t &field, const bn_t &g_a, const uint32_t np0) {
@@ -225,9 +236,6 @@ class gsv_t {
 
         if (_env.equals_ui32(n5, 0)) {
             if (_env.equals_ui32(n6, 0)) {
-#ifdef DEBUG
-                if (threadIdx.x == 0) printf("EQUAL\n");
-#endif
                 point_dbl(r_x, r_y, r_z, a_x, a_y, a_z, field, g_a, np0);
                 return;
             } else {
@@ -260,12 +268,14 @@ class gsv_t {
         _env.shift_right(r_y, n0, 1);  // r_y = (n6 * 'n9' - 'n8' * n5^3) / 2
     }
 
+    // Intel IPP's faster point addition
+    // Complexity: 4S, 12M, 0A, 6D, 1L
     __device__ __forceinline__ void point_add_ipp(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &a_x, const bn_t &a_y,
                                                   const bn_t &a_z, const bn_t &b_x, const bn_t &b_y, const bn_t &b_z,
                                                   const bn_t &field, const bn_t &g_a, const uint32_t np0) {
         if (_env.compare(a_x, b_x) == 0 && _env.compare(a_y, b_y) == 0 && _env.compare(a_z, b_z) == 0) {
             // if (threadIdx.x == 0) printf("DOUBLE\n");
-            point_dbl(r_x, r_y, r_z, a_x, a_y, a_z, field, g_a, np0);
+            point_dbl_ipp(r_x, r_y, r_z, a_x, a_y, a_z, field, g_a, np0);
             return;
         }
         if (_env.equals_ui32(a_z, 0)) {
@@ -301,7 +311,7 @@ class gsv_t {
         if (_env.equals_ui32(h, 0)) {
             if (_env.equals_ui32(r, 0)) {
                 // if (threadIdx.x == 0) printf("EQUAL\n");
-                point_dbl(r_x, r_y, r_z, a_x, a_y, a_z, field, g_a, np0);
+                point_dbl_ipp(r_x, r_y, r_z, a_x, a_y, a_z, field, g_a, np0);
                 return;
             } else {
                 _env.set_ui32(r_z, 0);
@@ -359,9 +369,9 @@ class gsv_t {
     }
 
     // double-and-add, index decreasing
-    __device__ __forceinline__ void point_mult_alt(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
-                                                   const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
-                                                   const uint32_t np0) {
+    __device__ __forceinline__ void point_mult_desc(bn_t &r_x, bn_t &r_y, bn_t &r_z, const bn_t &p_x, const bn_t &p_y,
+                                                    const bn_t &p_z, const bn_t &d, const bn_t &field, const bn_t &g_a,
+                                                    const uint32_t np0) {
         bn_t q_x, q_y, q_z;
         uint32_t limb;
         __shared__ cgbn_mem_t<params::BITS> s_d;
@@ -425,6 +435,7 @@ class gsv_t {
         }
     }
 
+    // transform (X, Y, Z) into x := X/Z^2
     __device__ __forceinline__ void conv_affine_x(bn_t &a_x, const bn_t &j_x, const bn_t &j_z, const bn_t &field,
                                                   const uint32_t np0) {
         if (_env.equals_ui32(j_z, 0)) {
@@ -565,6 +576,18 @@ class gsv_t {
         instance_t *instances = (instance_t *)malloc(sizeof(instance_t) * count);
 
         for (int index = 0; index < count; index++) {
+#ifdef SM2
+            set_words(instances[index].r._limbs, "23B20B796AAAFEAAA3F1592CB9B4A93D5A8D279843E1C57980E64E0ABC5F5B05",
+                      params::BITS / 32);
+            set_words(instances[index].s._limbs, "E11F5909F947D5BE08C84A22CE9F7C338F7CF4A5B941B9268025495D7D433071",
+                      params::BITS / 32);
+            set_words(instances[index].key_x._limbs, "D5548C7825CBB56150A3506CD57464AF8A1AE0519DFAF3C58221DC810CAF28DD",
+                      params::BITS / 32);
+            set_words(instances[index].key_y._limbs, "921073768FE3D59CE54E79A49445CF73FED23086537027264D168946D479533E",
+                      params::BITS / 32);
+            set_words(instances[index].e._limbs, "10D51CB90C0C0522E94875A2BEA7AB72299EBE7192E64EFE0573B1C77110E5C9",
+                      params::BITS / 32);
+#else
             // #ifdef DEBUG
             //       set_words(instances[index].r._limbs, "40F1EC59F793D9F49E09DCEF49130D4194F79FB1EED2CAA55BACDB49C4E755D1",
             //                 params::BITS / 32);
@@ -588,6 +611,7 @@ class gsv_t {
             // #endif
             set_words(instances[index].e._limbs, "B524F552CD82B8B028476E005C377FB19A87E6FC682D48BB5D42E3D9B9EFFE76",
                       params::BITS / 32);
+#endif
         }
         return instances;
     }
@@ -648,14 +672,14 @@ __global__ void kernel_sig_verify(cgbn_error_report_t *report, typename gsv_t<pa
 }
 
 template <class params>
-void test_sig_verify(uint32_t instance_count) {
+void test_sig_verify(uint32_t instance_count, typename gsv_t<params>::instance_t *d_instances, int32_t *d_results,
+                     cgbn_error_report_t *report) {
     typedef typename gsv_t<params>::instance_t instance_t;
     typedef typename gsv_t<params>::ec_t ec_t;
 
-    instance_t *instances, *d_instances;
+    instance_t *instances;
     ec_t sm2;
-    int32_t *results, *d_results;  // signature verification result, 0 is true, 1 is false
-    cgbn_error_report_t *report;
+    int32_t *results;                                      // signature verification result, 0 is true, 1 is false
     int32_t TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
     int32_t TPI = params::TPI, IPB = TPB / TPI;            // IPB: instances per block
 
@@ -683,11 +707,7 @@ void test_sig_verify(uint32_t instance_count) {
 
     auto t_start = std::chrono::high_resolution_clock::now();
 
-    CUDA_CHECK(cudaMalloc((void **)&d_instances, sizeof(instance_t) * instance_count));
-    CUDA_CHECK(cudaMalloc((void **)&d_results, sizeof(int32_t) * instance_count));
     CUDA_CHECK(cudaMemcpy(d_instances, instances, sizeof(instance_t) * instance_count, cudaMemcpyHostToDevice));
-
-    CUDA_CHECK(cgbn_error_report_alloc(&report));
 
     auto k_start = std::chrono::high_resolution_clock::now();
 
@@ -716,24 +736,40 @@ void test_sig_verify(uint32_t instance_count) {
 
     free(instances);
     free(results);
+}
+
+#define MAX_INS 1048576
+
+int main(int argc, char **argv) {
+    int device_id = 0;
+    if (argc >= 2) {
+        device_id = atoi(argv[1]);
+    }
+    CUDA_CHECK(cudaSetDevice(device_id));
+
+    typedef gsv_params_t<16, 512> params;  // threads per instance, instance size
+    typedef typename gsv_t<params>::instance_t instance_t;
+
+    instance_t *d_instances;
+    int32_t *d_results;
+    cgbn_error_report_t *report;
+
+    CUDA_CHECK(cudaMalloc((void **)&d_instances, sizeof(instance_t) * MAX_INS));
+    CUDA_CHECK(cudaMalloc((void **)&d_results, sizeof(int32_t) * MAX_INS));
+    CUDA_CHECK(cgbn_error_report_alloc(&report));
+
+    test_sig_verify<params>(32768, d_instances, d_results, report);
+
+    // test_sig_verify<params>(32768, d_instances, d_results);
+
+    for (int ins = 256; ins <= 1048576; ins *= 2) {
+        printf("#instances: %d\n", ins);
+        test_sig_verify<params>(ins, d_instances, d_results, report);
+    }
+
     CUDA_CHECK(cudaFree(d_instances));
     CUDA_CHECK(cudaFree(d_results));
     CUDA_CHECK(cgbn_error_report_free(report));
-}
-
-int main() {
-    CUDA_CHECK(cudaSetDevice(1));
-
-    typedef gsv_params_t<16, 512> params;  // threads per instance, instance size
-
-    test_sig_verify<params>(32768);
-
-    test_sig_verify<params>(32768);
-
-    // for (int ins = 256; ins <= 1048576; ins *= 2) {
-    //     printf("#instances: %d\n", ins);
-    //     test_sig_verify<params>(ins);
-    // }
 
     return 0;
 }
