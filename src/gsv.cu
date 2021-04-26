@@ -77,10 +77,16 @@ class gsv_t {
     // fast modular addition: r = (a + b) mod m
     // both a and b should be non-negative and less than m
     __device__ __forceinline__ void mod_add(bn_t &r, const bn_t &a, const bn_t &b, const bn_t &m) {
+#ifdef BIT256
+        if (_env.add(r, a, b) || _env.compare(r, m) >= 0) {
+            _env.sub(r, r, m);
+        }
+#else
         _env.add(r, a, b);
         if (_env.compare(r, m) >= 0) {
             _env.sub(r, r, m);
         }
+#endif
     }
 
     // r = (a - b) mod m
@@ -92,10 +98,18 @@ class gsv_t {
 
     // r = (a * 2) mod m
     __device__ __forceinline__ void mod_lshift1(bn_t &r, const bn_t &a, const bn_t &m) {
+#ifdef BIT256
+        uint32_t z = _env.clz(a);
+        _env.shift_left(r, a, 1);
+        if (z == 0 || _env.compare(r, m) >= 0) {
+            _env.sub(r, r, m);
+        }
+#else
         _env.shift_left(r, a, 1);
         if (_env.compare(r, m) >= 0) {
             _env.sub(r, r, m);
         }
+#endif
     }
 
     // not used
@@ -164,10 +178,20 @@ class gsv_t {
         _env.mont_sqr(r_y, m, field, np0);  // r_y = 16 * a_y^4
 
         _env.mont_mul(s, m, a_x, field, np0);  // s = 4 * a_x * a_y^2
+
+#ifdef BIT256
+        if (_env.ctz(r_y) == 0 && _env.add(r_y, r_y, field)) {
+            _env.shift_right(r_y, r_y, 1);
+            _env.bitwise_mask_ior(r_y, r_y, -1);
+        } else {
+            _env.shift_right(r_y, r_y, 1);  // r_y = 8 * a_y^4
+        }
+#else
         if (_env.ctz(r_y) == 0) {
             _env.add(r_y, r_y, field);
         }
-        _env.shift_right(r_y, r_y, 1);  // r_y = 8 * a_y^4
+        _env.shift_right(r_y, r_y, 1);      // r_y = 8 * a_y^4
+#endif
 
 #ifdef SM2
         mod_add(m, a_x, u, field);           // m = a_x + u
@@ -590,7 +614,7 @@ class gsv_t {
                                                   const bn_t &field, bn_t &g_a)
 #endif
     {
-        bn_t t, x1, y1, z1, x2, y2, z2, one;
+        bn_t t, x1, y1, z1, x2, y2, z2;
         uint32_t np0;
 
         if (_env.compare_ui32(r, 1) < 0 || _env.compare_ui32(s, 1) < 0 || _env.compare(order, r) <= 0 ||
@@ -604,31 +628,31 @@ class gsv_t {
             return 0;
         }
 
-        _env.set_ui32(one, 1);
-        np0 = _env.bn2mont(one, one, field);
+        _env.set_ui32(z1, 1);
+        np0 = _env.bn2mont(z1, z1, field);
+        _env.set(z2, z1);
+
         mod(g_a, field);
         _env.bn2mont(g_a, g_a, field);
 
         // s * generator + t * pkey
         _env.set(x1, g_x);
         _env.set(y1, g_y);
-        _env.set(z1, one);
         mod(x1, field);
         _env.bn2mont(x1, x1, field);
         mod(y1, field);
         _env.bn2mont(y1, y1, field);
-        point_mult_naf(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
+        point_mult(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
 
         __syncthreads();  // TODO: temp fix of wrong answer, need to test on different input
 
         _env.set(x2, key_x);
         _env.set(y2, key_y);
-        _env.set(z2, one);
         mod(x2, field);
         _env.bn2mont(x2, x2, field);
         mod(y2, field);
         _env.bn2mont(y2, y2, field);
-        point_mult_naf(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
+        point_mult(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
 
         point_add(x1, y1, z1, x1, y1, z1, x2, y2, z2, field, g_a, np0);
 
@@ -814,7 +838,11 @@ int main(int argc, char **argv) {
     }
     CUDA_CHECK(cudaSetDevice(device_id));
 
+#ifdef BIT256
+    typedef gsv_params_t<16, 256> params;  // threads per instance, instance size
+#else
     typedef gsv_params_t<16, 512> params;  // threads per instance, instance size
+#endif
     typedef typename gsv_t<params>::instance_t instance_t;
 
     instance_t *d_instances;
