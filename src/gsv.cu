@@ -9,7 +9,8 @@
 #include "../include/cgbn/cgbn.h"
 #include "support.h"
 
-#define SM2
+#define SM2     // enable optimization for SM2 (a=-3)
+// #define BIT256  // use 256-bit integer instead of 512-bit
 
 // The CGBN context uses the following three parameters:
 //   TBP             - threads per block (zero means to use the blockDim.x)
@@ -642,7 +643,7 @@ class gsv_t {
         _env.bn2mont(x1, x1, field);
         mod(y1, field);
         _env.bn2mont(y1, y1, field);
-        point_mult(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
+        point_mult_naf(x1, y1, z1, x1, y1, z1, s, field, g_a, np0);
 
         __syncthreads();  // TODO: temp fix of wrong answer, need to test on different input
 
@@ -652,7 +653,7 @@ class gsv_t {
         _env.bn2mont(x2, x2, field);
         mod(y2, field);
         _env.bn2mont(y2, y2, field);
-        point_mult(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
+        point_mult_naf(x2, y2, z2, x2, y2, z2, t, field, g_a, np0);
 
         point_add(x1, y1, z1, x1, y1, z1, x2, y2, z2, field, g_a, np0);
 
@@ -711,7 +712,7 @@ class gsv_t {
         for (int index = 0; index < count; index++) {
             int openssl_result = -1;
 
-            // TODO: call OpenSSL sig verify here
+            // TODO: call OpenSSL sig verify here for cross validation
             openssl_result = 0;
 
 #ifdef DEBUG
@@ -829,7 +830,7 @@ void test_sig_verify(uint32_t instance_count, typename gsv_t<params>::instance_t
     free(results);
 }
 
-#define MAX_INS 1048576
+#define MAX_INS 262144
 
 int main(int argc, char **argv) {
     int device_id = 0;
@@ -857,7 +858,7 @@ int main(int argc, char **argv) {
 
     // test_sig_verify<params>(32768, d_instances, d_results, report);
 
-    for (int ins = 256; ins <= 1048576; ins *= 2) {
+    for (int ins = 256; ins <= MAX_INS; ins *= 2) {
         printf("#instances: %d\n", ins);
         test_sig_verify<params>(ins, d_instances, d_results, report);
     }
