@@ -1,3 +1,6 @@
+#ifndef _CGBN_CU_
+#define _CGBN_CU_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -87,3 +90,5 @@ const char *cgbn_error_string(cgbn_error_report_t *report) {
   }
   return NULL;
 }
+
+#endif // _CGBN_CU_

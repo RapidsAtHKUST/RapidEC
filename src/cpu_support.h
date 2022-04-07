@@ -1,3 +1,6 @@
+#ifndef _GSV_CPU_SUPPORT_H_
+#define _GSV_CPU_SUPPORT_H_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -130,3 +133,5 @@ void random_words(uint32_t *x, uint32_t count) {
   for(index=0;index<count;index++)
     x[index]=random_word();
 }
+
+#endif // _GSV_CPU_SUPPORT_H_

@@ -1,3 +1,6 @@
+#ifndef _GSV_CPU_SIMPLE_BN_MATH_H_
+#define _GSV_CPU_SIMPLE_BN_MATH_H_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -44,3 +47,4 @@ void sub_words(uint32_t *r, uint32_t *x, uint32_t *y, uint32_t count) {
   }
 }
 
+#endif // _GSV_CPU_SIMPLE_BN_MATH_H_

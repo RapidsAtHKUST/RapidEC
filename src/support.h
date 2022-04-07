@@ -1,3 +1,6 @@
+#ifndef _GSV_SUPPORT_H_
+#define _GSV_SUPPORT_H_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -25,3 +28,5 @@ IN THE SOFTWARE.
 #include "cpu_support.h"
 #include "cpu_simple_bn_math.h"
 #include "gpu_support.h"
+
+#endif // _GSV_SUPPORT_H_

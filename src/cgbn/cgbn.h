@@ -1,3 +1,6 @@
+#ifndef _CGBN_H_
+#define _CGBN_H_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -505,3 +508,5 @@ template<class env_t>
 __host__ __device__ __forceinline__ void cgbn_store(env_t env, typename env_t::cgbn_local_t *address, const typename env_t::cgbn_t &a) {
   env.store(address, a);
 }
+
+#endif // _CGBN_H_

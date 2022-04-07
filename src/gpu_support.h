@@ -1,3 +1,6 @@
+#ifndef _GSV_GPU_SUPPORT_H_
+#define _GSV_GPU_SUPPORT_H_
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
@@ -63,3 +66,5 @@ void cgbn_check(cgbn_error_report_t *report, const char *file=NULL, int32_t line
 
 #define CUDA_CHECK(action) cuda_check(action, #action, __FILE__, __LINE__)
 #define CGBN_CHECK(report) cgbn_check(report, __FILE__, __LINE__)
+
+#endif // _GSV_GPU_SUPPORT_H_

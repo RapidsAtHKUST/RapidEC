@@ -25,10 +25,10 @@ IN THE SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 
-#if !defined(__CUDACC__)
-  typedef struct {uint32_t x; uint32_t y; uint32_t z;} dim3;
-  #define __host__
-#endif
+// #if !defined(__CUDACC__)
+//   typedef struct {uint32_t x; uint32_t y; uint32_t z;} dim3;
+//   #define __host__
+// #endif
 
 typedef enum {
   cgbn_instance_converged,

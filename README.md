@@ -1,36 +1,54 @@
-# RapidSV: Accelerating Elliptic Curve Signature Verification
+# RapidEC: Accelerating Elliptic Curve Digital Signature Algorithms on GPUs
 
-## Build
+GPU-accelerated ECDSA library for the SM2 curve.
+
+## Dependencies
+
+- NVIDIA CUDA Toolkit
+- GMP (GNU Multiple Precision Library)
+
+## Build the example (main.cpp)
+
+1. Build with CMake
+```
+mkdir build && cd build
+cmake ..
+make
+```
+
+2. Build manually
+```
+mkdir -p bin
+nvcc -O3 -gencode arch=compute_70,code=sm_70 -o bin/gsv.o -c gsv.cu
+g++ -O3 -I/usr/local/cuda-11/include -o bin/main.o -c main.cpp
+g++ -O3 -o bin/main bin/gsv.o bin/main.o -L/usr/local/cuda-11/lib64 -lcuda -lcudart -lgmp
+```
+
+## Build and run Docker image
 
 ```
-make volta  # For V100 GPU
-make test   # Run test on sample data
-make debug  # Enable debug logging
+docker build -t rapidec:v1 .
+docker run -it --gpus all rapidec:v1
 ```
 
-## Usage
+## API description
 
 ```
-./bin/gsv [GPU device ID=0]
+#include "RapidSV/gsv_wrapper.h"
+void GSV_init(int device_id = 0);
+void GSV_verify(int count, sig_t *sig, int *results);
+void GSV_close();
 ```
 
-## Performance
+`GSV_init()` initializes the GPU device, allocates the GPU memory pool, and copies the precomputed table to constant memory.
 
-Signature verification speed (verification per second) of the SM2 curve on a V100 GPU.
+`GSV_verify()` does the signature verification.
+- The first parameter is the number of signatures.
+- The second parameter is the array of signatures. Each signature is a `sig_t` struct that contains 5 big integers, namely signature `(r, s)`, message digest `e`, and public key `(key_x, key_y)`. Each big integer is represented by an array of unsigned 32-bit integers.
+- The third parameter is the array of verification results. Correct verification returns 0, otherwise 1.
 
-| \# Instances | TPI=4  | TPI=8  | TPI=16 | TPI=32 |
-|-----------|--------|--------|--------|--------|
-| 256       | 24797  | 29211  | 46961  | 16247  |
-| 512       | 50143  | 58245  | 93806  | 31834  |
-| 1024      | 100425 | 116121 | 175414 | 54013  |
-| 2048      | 199952 | 210174 | 187385 | 61769  |
-| 4096      | 339504 | 228033 | 243576 | 60714  |
-| 8192      | 209716 | 157628 | 221000 | 52265  |
-| 16384     | 227121 | 171301 | 203729 | 45149  |
-| 32768     | 184437 | 150094 | 178685 | 40747  |
-| 65536     | 159113 | 132883 | 157507 | 38251  |
-| 131072    | 135282 | 120625 | 147475 | 37165  |
-| 262144    | 129478 | 114446 | 142155 | 36535  |
+`GSV_close()` frees GPU memory.
 
 ## Acknowledgement
+
 This project used the [CGBN](https://github.com/NVlabs/CGBN) library.
