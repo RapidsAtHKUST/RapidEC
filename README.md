@@ -12,7 +12,7 @@ GPU-accelerated ECDSA library for the SM2 curve.
 1. Build with CMake
 ```
 mkdir build && cd build
-cmake ..
+cmake -DCMAKE_CUDA_ARCHITECTURES=70 ..
 make
 ```
 
